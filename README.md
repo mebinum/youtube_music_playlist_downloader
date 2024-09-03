@@ -14,7 +14,30 @@ If you run into any issues, you can try adding this program
 and your ffmpeg folder to the exclusions of your antivirus.
 
 ## Requirements
+
 - FFMPEG: Make sure you can run `ffmpeg` from the command line. If you are on Windows check your PATH.
+- python - `3.9.17`
+- pyenv-virtualenv
+- [Poetry](https://python-poetry.org/docs/#installation)
+
+## Poetry Install
+
+```sh
+# create scraper virtual env
+pyenv virtualenv 3.9.17 ym_playlist
+```
+
+## Start project dependencies.
+
+Run `pip install poetry` if you need to install poetry.
+
+
+```sh
+# select pyenv
+pyenv activate ym_playlist
+poetry install
+```
+
 
 ## Install
 For Windows, you can directly download the executable from the following link:

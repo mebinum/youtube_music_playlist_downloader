@@ -49,6 +49,9 @@ class SongFileInfo:
         self.file_path = file_path
         self.track_num = track_num
 
+    def __repr__(self):
+        return f"<SongFileInfo (name={self.name}, file_name={self.file_name},file_path={self.file_path},track_num={self.track_num},video_id={self.video_id})>"
+
 
 def write_config(file, config: dict):
     with open(file, "w") as f:
@@ -867,6 +870,8 @@ def generate_playlist(
         playlist_name
     )  # May raise exception for duplicate songs
 
+    files_database.update(song_file_infos)
+
     track_num = 1
     skipped_videos = 0
     updated_video_ids = []
@@ -1278,6 +1283,7 @@ if __name__ == "__main__":
             check_ffmpeg()
 
             config = {}
+            files_database = {}
             playlists_data = {}
             quit_enabled = True
             selected_option = None
@@ -1440,7 +1446,10 @@ if __name__ == "__main__":
                         )
                     print("\n" + "\n".join(playlists_list) + "\n")
 
-                    # print("playlists_data\n", playlists_data)
+                    config_file = playlists_data[0]["config_file"]
+                    f = open(config_file)
+                    data = json.load(f)
+                    print("data in file  \n\n", data)
 
                     update_index = get_index_option_response(
                         "Enter a playlist number to update", len(playlists_data)
@@ -1450,7 +1459,6 @@ if __name__ == "__main__":
                     current_playlist_name = playlist_data["playlist_name"]
                     with open(playlist_data["config_file"], "r") as f:
                         config = json.load(f)
-                        # print("playlists_data config\n", config)
 
                 # In case settings were somehow missing
                 config = setup_config(config)
