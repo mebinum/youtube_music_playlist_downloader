@@ -9,15 +9,16 @@ import copy
 import json
 import time
 import requests
-import subprocess
 import concurrent.futures
 from PIL import Image
 from io import BytesIO
 from pathlib import Path
+from models import FilePathCollector, SongFileInfo, get_song_info, get_song_info_ytdl
+from utils import check_ffmpeg, create_symlink, write_config
 from langcodes import Language
 from yt_dlp import YoutubeDL, postprocessor
 from urllib.parse import urlparse, parse_qs
-from mutagen.id3 import ID3, APIC, TIT2, TPE1, TRCK, TALB, TDRC, WOAR, SYLT, USLT, error
+from mutagen.id3 import ID3, APIC, TIT2, TPE1, TRCK, TALB, TDRC, WOAR, SYLT, USLT, TCON, error
 
 # ID3 info:
 # APIC: thumbnail
@@ -31,51 +32,7 @@ from mutagen.id3 import ID3, APIC, TIT2, TPE1, TRCK, TALB, TDRC, WOAR, SYLT, USL
 # USLT: unsynced lyrics
 
 
-class FilePathCollector(postprocessor.common.PostProcessor):
-    def __init__(self):
-        super(FilePathCollector, self).__init__(None)
-        self.file_paths = []
 
-    def run(self, information):
-        self.file_paths.append(information["filepath"])
-        return [], information
-
-
-class SongFileInfo:
-    def __init__(self, video_id, name, file_name, file_path, track_num):
-        self.video_id = video_id
-        self.name = name
-        self.file_name = file_name
-        self.file_path = file_path
-        self.track_num = track_num
-
-    def __repr__(self):
-        return f"<SongFileInfo (name={self.name}, file_name={self.file_name},file_path={self.file_path},track_num={self.track_num},video_id={self.video_id})>"
-
-
-def write_config(file, config: dict):
-    with open(file, "w") as f:
-        json.dump(config, f, indent=4)
-
-
-def check_ffmpeg():
-    ffmpeg_available = True
-    try:
-        subprocess.check_output(["ffmpeg", "-version"])
-    except Exception as e:
-        ffmpeg_available = False
-    if not ffmpeg_available:
-        print(
-            "\n".join(
-                [
-                    "[ERROR] ffmpeg not found. Please ensure ffmpeg is installed",
-                    "and you have included it in your PATH environment variable.",
-                    "Download ffmpeg here: https://www.ffmpeg.org/download.html.",
-                    "-----------------------------------------------------------",
-                ]
-            )
-        )
-    return ffmpeg_available
 
 
 def get_playlist_info(config: dict):
@@ -154,6 +111,7 @@ def get_metadata_map():
         "date": ["TDRC"],
         "url": ["WOAR"],
         "lyrics": ["SYLT", "USLT"],
+        "genre": ["TCON"],
     }
 
 
@@ -175,44 +133,6 @@ def valid_metadata(config: dict, metadata_dict: dict):
         [value for key, value in get_metadata_map().items() if include_metadata[key]]
     )
     return all([value for tag, value in metadata_dict.items() if tag in selected_tags])
-
-
-def get_song_info_ytdl(track_num, config: dict):
-    # Get ytdl for song info
-    name_format = config["name_format"]
-    if config["track_num_in_name"]:
-        name_format = f"{track_num}. {name_format}"
-
-    ytdl_opts = {
-        "quiet": True,
-        "geo_bypass": True,
-        "outtmpl": name_format,
-        "format": config["audio_format"],
-        "cookiefile": None if config["cookie_file"] == "" else config["cookie_file"],
-        "cookiesfrombrowser": (
-            None
-            if config["cookies_from_browser"] == ""
-            else tuple(config["cookies_from_browser"].split(":"))
-        ),
-        "writesubtitles": True,
-        "allsubtitles": True,
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": config["audio_codec"],
-                "preferredquality": config["audio_quality"],
-            }
-        ],
-    }
-
-    info_dict = {}
-    return YoutubeDL(ytdl_opts)
-
-
-def get_song_info(track_num, link, config: dict):
-    # Get song metadata from youtube
-    ytdl = get_song_info_ytdl(track_num, config)
-    return ytdl.extract_info(link, download=False)
 
 
 def get_subtitles_url(subtitles, lang):
@@ -627,7 +547,7 @@ def get_video_id_from_metadata(tags):
     return get_url_parameter(str(links[0]), "v")
 
 
-def get_song_file_info(playlist_name, song_file_name):
+def get_song_file_info(playlist_name, song_file_name) -> SongFileInfo:
     song_file_path = os.path.join(playlist_name, song_file_name)
 
     try:
@@ -644,6 +564,7 @@ def get_song_file_info(playlist_name, song_file_name):
         print(
             f"Song file '{song_file_name}' is in an invalid format and will be ignored"
         )
+        print(f"[error]: {e}")
         return None
 
     return SongFileInfo(
@@ -651,7 +572,7 @@ def get_song_file_info(playlist_name, song_file_name):
     )
 
 
-def get_song_file_infos(playlist_name):
+def get_song_file_infos(playlist_name, allow_duplicate_files: bool = False) -> dict:
     song_file_infos = {}
     duplicate_files = {}
     for file_name in os.listdir(playlist_name):
@@ -671,8 +592,11 @@ def get_song_file_infos(playlist_name):
 
         song_file_infos[song_file_info.video_id] = song_file_info
 
-    if duplicate_files:
+    if duplicate_files and not allow_duplicate_files:
         exception_strings = []
+        print(
+            f"The following files link to the same video id '{song_file_info.video_id}'\n{duplicate_files}"
+        )
         for song_video_id, file_names in duplicate_files.items():
             exception_strings.append(
                 "\n".join(
@@ -698,6 +622,23 @@ def get_song_file_infos(playlist_name):
                 ]
             )
         )
+
+    if duplicate_files and allow_duplicate_files:
+        print(
+            f"The following files link to the same video id '{song_file_info.video_id}'\n{duplicate_files}"
+        )
+        print("Duplicate files will link to the first file used.")
+
+        print(f"song_file_infos {song_file_infos}.")
+        print(f"Duplicate files {duplicate_files}.")
+        # for song_video_id, file_names in duplicate_files.items():
+        #     file_names.sort()
+        #     file_name = file_names[0]
+        #     original_file_name = song_file_infos[song_video_id].file_name
+        #     create_symlink(
+        #         os.path.join(playlist_name, original_file_name),
+        #         os.path.join(playlist_name, file_name),
+        #     )
 
     return song_file_infos
 
@@ -1120,9 +1061,9 @@ def get_existing_playlists(directory: str, config_file_name: str):
                     config = json.load(f)
             except json.decoder.JSONDecodeError as e:
                 print(e)
-                print(
-                    f"[ERROR] Config file '{config_file}' is in an invalid format. Please fix or remove the config file."
-                )
+                # print(
+                #     f"[ERROR] Config file '{config_file}' is in an invalid format. Please fix or remove the config file."
+                # )
                 continue
 
             try:
